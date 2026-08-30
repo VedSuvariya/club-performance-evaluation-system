@@ -65,7 +65,7 @@ export const NAV_CONFIGS: Record<UserRole, NavItem[]> = {
   STUDENT_WELFARE_COUNCIL: [
     { label: 'Dashboard', href: '/swc', icon: LayoutDashboard },
     { label: 'Clubs', href: '/swc/clubs', icon: Building },
-    { label: 'Evaluations', href: '/swc/evaluations', icon: Award },
+    { label: 'Evaluations', href: '/swc/performance', icon: Award },
     { label: 'Reports', href: '/swc/reports', icon: FileBarChart },
   ],
 };

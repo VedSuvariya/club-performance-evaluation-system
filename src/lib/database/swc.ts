@@ -65,10 +65,16 @@ export async function getSwcDashboardData(): Promise<SwcDashboardData> {
   const [assocRes, complRes, evalsRes, reportsRes, transfersRes] = await Promise.all([
     supabase.from('task_assignments').select('user_id'),
     supabase.from('task_completions').select('status').eq('status', 'APPROVED'),
-    supabase.from('evaluations').select('rating, created_at, task:tasks (title), member:users (full_name)'),
-    supabase.from('reports').select('id, report_type, created_at, target_club:clubs (name), target_user:users (full_name)').order('created_at', { ascending: false }).limit(5),
-    supabase.from('club_transfer_requests').select('id, status, created_at, user:users (full_name), new_club:clubs!new_club_id (name)').order('created_at', { ascending: false }).limit(5),
+    supabase.from('evaluations').select('rating, created_at, task_id, member_id'),
+    supabase.from('reports').select('id, report_type, created_at, target_club:clubs (name), target_user:users!target_user_id (full_name)').order('created_at', { ascending: false }).limit(5),
+    supabase.from('club_transfer_requests').select('id, status, created_at, user:users!user_id (full_name), new_club:clubs!new_club_id (name)').order('created_at', { ascending: false }).limit(5),
   ]);
+
+  if (assocRes.error) throw assocRes.error;
+  if (complRes.error) throw complRes.error;
+  if (evalsRes.error) throw evalsRes.error;
+  if (reportsRes.error) throw reportsRes.error;
+  if (transfersRes.error) throw transfersRes.error;
 
   const assignmentsCount = assocRes.data?.length || 0;
   const completionsCount = complRes.data?.length || 0;
@@ -82,6 +88,29 @@ export async function getSwcDashboardData(): Promise<SwcDashboardData> {
     const sum = evaluations.reduce((acc, curr) => acc + curr.rating, 0);
     overallAverageRating = Number((sum / totalEvaluated).toFixed(2));
   }
+
+  // Fetch task titles and member names for the evaluations in-memory
+  const taskIds = [...new Set(evaluations.map((e) => e.task_id).filter(Boolean))];
+  const memberIds = [...new Set(evaluations.map((e) => e.member_id).filter(Boolean))];
+
+  const [tasksRes, membersRes] = await Promise.all([
+    taskIds.length > 0
+      ? supabase.from('tasks').select('id, title').in('id', taskIds)
+      : Promise.resolve({ data: null, error: null }),
+    memberIds.length > 0
+      ? supabase.from('users').select('id, full_name').in('id', memberIds)
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+
+  if (tasksRes.error) throw tasksRes.error;
+  if (membersRes.error) throw membersRes.error;
+
+  const taskTitleMap = new Map<string, string>(
+    (tasksRes.data || []).map((t) => [t.id, t.title])
+  );
+  const memberNameMap = new Map<string, string>(
+    (membersRes.data || []).map((m) => [m.id, m.full_name])
+  );
 
   // 4. Fetch reports count
   const { count: recentReportsCount } = await supabase
@@ -128,11 +157,13 @@ export async function getSwcDashboardData(): Promise<SwcDashboardData> {
 
   // Add evaluations
   evaluations.slice(0, 5).forEach((e: any, idx: number) => {
+    const memberName = memberNameMap.get(e.member_id) || 'Member';
+    const taskTitle = taskTitleMap.get(e.task_id) || 'Task';
     activityItems.push({
       id: `eval-${idx}`,
       type: 'EVALUATION',
       title: 'Member Evaluated',
-      description: `Evaluation submitted for ${e.member?.full_name || 'Member'} on "${e.task?.title || 'Task'}" (★${e.rating})`,
+      description: `Evaluation submitted for ${memberName} on "${taskTitle}" (★${e.rating})`,
       timestamp: e.created_at,
     });
   });
