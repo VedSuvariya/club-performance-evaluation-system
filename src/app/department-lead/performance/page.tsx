@@ -1,7 +1,7 @@
 import { requireRole } from '@/lib/permissions';
 import { AppShell } from '@/components/layout/AppShell';
 import { getLeadClub } from '@/lib/database/department-lead';
-import { getClubMembersPerformanceList } from '@/lib/database/performance';
+import { getClubMembersPerformanceList, ClubMemberPerformance } from '@/lib/database/performance';
 import { EmptyState } from '@/components/feedback/FeedbackStates';
 import { ClubPerformanceClient } from './ClubPerformanceClient';
 
@@ -31,7 +31,7 @@ export default async function DepartmentLeadPerformancePage() {
     );
   }
 
-  let members = [];
+  let members: ClubMemberPerformance[] = [];
   try {
     members = await getClubMembersPerformanceList(club.id);
   } catch (err) {

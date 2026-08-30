@@ -9,6 +9,7 @@ import {
   Award,
   UserCircle,
   ArrowLeftRight,
+  ArrowRightLeft,
   Users,
   TrendingUp,
   FileBarChart,
@@ -55,7 +56,8 @@ export const NAV_CONFIGS: Record<UserRole, NavItem[]> = {
   ],
   CLUB_PRESIDENT: [
     { label: 'Dashboard', href: '/club-president', icon: LayoutDashboard },
-    { label: 'Club Overview', href: '/club-president/overview', icon: Building },
+    { label: 'Club Overview', href: '/club-president/club', icon: Building },
+    { label: 'Club Transfers', href: '/club-president/club-transfers', icon: ArrowRightLeft },
     { label: 'Members', href: '/club-president/members', icon: Users },
     { label: 'Performance', href: '/club-president/performance', icon: TrendingUp },
     { label: 'Reports', href: '/club-president/reports', icon: FileBarChart },

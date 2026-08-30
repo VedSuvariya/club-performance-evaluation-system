@@ -21,14 +21,34 @@ export type ActionState = {
 
 // Zod schemas
 const createTaskSchema = z.object({
-  title: z.string().min(3, { message: 'Title must be at least 3 characters.' }).max(100),
-  description: z.string().max(1000, { message: 'Description must be less than 1000 characters.' }),
+  title: z
+    .string()
+    .min(3, { message: 'Title must be at least 3 characters.' })
+    .max(100),
+
+  description: z
+    .string()
+    .max(1000, {
+      message: 'Description must be less than 1000 characters.',
+    }),
+
   dueDate: z.string().nullable().or(z.literal('')),
 });
 
 const assignTaskSchema = z.object({
-  taskId: z.string().uuid({ message: 'Invalid task ID.' }),
-  memberIds: z.array(z.string().uuid({ message: 'Invalid member ID.' })).min(1, { message: 'Select at least one member.' }),
+  taskId: z.string().uuid({
+    message: 'Invalid task ID.',
+  }),
+
+  memberIds: z
+    .array(
+      z.string().uuid({
+        message: 'Invalid member ID.',
+      })
+    )
+    .min(1, {
+      message: 'Select at least one member.',
+    }),
 });
 
 /**
@@ -39,17 +59,29 @@ export async function createTaskAction(
   formData: FormData
 ): Promise<ActionState> {
   try {
+    // Check authentication and role
     const user = await requireRole('DEPARTMENT_LEAD');
 
+    // Find the club managed by this department lead
     const club = await getLeadClub(user.id);
+
     if (!club) {
-      return { success: false, error: 'You are not assigned to manage any club.' };
+      return {
+        success: false,
+        error: 'You are not assigned to manage any club.',
+      };
     }
 
+    // Get form values
     const rawTitle = formData.get('title')?.toString();
-    const rawDescription = formData.get('description')?.toString() || '';
-    const rawDueDate = formData.get('dueDate')?.toString() || null;
 
+    const rawDescription =
+      formData.get('description')?.toString() || '';
+
+    const rawDueDate =
+      formData.get('dueDate')?.toString() || null;
+
+    // Validate form data
     const validation = createTaskSchema.safeParse({
       title: rawTitle,
       description: rawDescription,
@@ -57,23 +89,65 @@ export async function createTaskAction(
     });
 
     if (!validation.success) {
-      const errorMsg = validation.error.issues.map((issue) => issue.message).join(' ');
-      return { success: false, error: errorMsg };
+      const errorMsg = validation.error.issues
+        .map((issue) => issue.message)
+        .join(' ');
+
+      return {
+        success: false,
+        error: errorMsg,
+      };
     }
 
-    const { title, description, dueDate } = validation.data;
+    const {
+      title,
+      description,
+      dueDate,
+    } = validation.data;
 
-    await createTaskForClub(club.id, user.id, title, description, dueDate || null);
+    // Create task
+    await createTaskForClub(
+      club.id,
+      user.id,
+      title,
+      description,
+      dueDate || null
+    );
 
+    // Refresh relevant pages
     revalidatePath('/department-lead');
     revalidatePath('/department-lead/tasks');
+    revalidatePath('/department-lead/members');
 
-    return { success: true };
+    return {
+      success: true,
+    };
   } catch (err) {
-    if (err instanceof Error && (err.message === 'UNAUTHENTICATED' || err.message === 'UNAUTHORIZED')) {
-      return { success: false, error: 'Unauthorized access.' };
+    // IMPORTANT:
+    // Print the real database error in the VS Code terminal.
+    console.error('CREATE TASK ERROR:', err);
+
+    if (
+      err instanceof Error &&
+      (
+        err.message === 'UNAUTHENTICATED' ||
+        err.message === 'UNAUTHORIZED'
+      )
+    ) {
+      return {
+        success: false,
+        error: 'Unauthorized access.',
+      };
     }
-    return { success: false, error: 'An unexpected database error occurred.' };
+
+    // Show the actual error instead of hiding it
+    return {
+      success: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Unknown database error',
+    };
   }
 }
 
@@ -82,44 +156,92 @@ export async function createTaskAction(
  */
 export async function assignTaskAction(
   _prevState: ActionState | null,
-  payload: { taskId: string; memberIds: string[] }
+  payload: {
+    taskId: string;
+    memberIds: string[];
+  }
 ): Promise<ActionState> {
   try {
     const user = await requireRole('DEPARTMENT_LEAD');
 
     const club = await getLeadClub(user.id);
+
     if (!club) {
-      return { success: false, error: 'You are not assigned to manage any club.' };
+      return {
+        success: false,
+        error: 'You are not assigned to manage any club.',
+      };
     }
 
     const validation = assignTaskSchema.safeParse(payload);
+
     if (!validation.success) {
-      const errorMsg = validation.error.issues.map((issue) => issue.message).join(' ');
-      return { success: false, error: errorMsg };
+      const errorMsg = validation.error.issues
+        .map((issue) => issue.message)
+        .join(' ');
+
+      return {
+        success: false,
+        error: errorMsg,
+      };
     }
 
-    const { taskId, memberIds } = validation.data;
+    const {
+      taskId,
+      memberIds,
+    } = validation.data;
 
-    await assignTaskToMembers(club.id, taskId, memberIds);
+    await assignTaskToMembers(
+      club.id,
+      taskId,
+      memberIds
+    );
 
     revalidatePath('/department-lead');
     revalidatePath('/department-lead/tasks');
     revalidatePath('/department-lead/members');
 
-    return { success: true };
+    return {
+      success: true,
+    };
   } catch (err) {
+    console.error('ASSIGN TASK ERROR:', err);
+
     if (err instanceof Error) {
-      if (err.message === 'UNAUTHENTICATED' || err.message === 'UNAUTHORIZED') {
-        return { success: false, error: 'Unauthorized access.' };
+      if (
+        err.message === 'UNAUTHENTICATED' ||
+        err.message === 'UNAUTHORIZED'
+      ) {
+        return {
+          success: false,
+          error: 'Unauthorized access.',
+        };
       }
+
       if (err.message === 'UNAUTHORIZED_TASK') {
-        return { success: false, error: 'The requested task does not belong to your club.' };
+        return {
+          success: false,
+          error:
+            'The requested task does not belong to your club.',
+        };
       }
+
       if (err.message === 'UNAUTHORIZED_MEMBERS') {
-        return { success: false, error: 'One or more selected members do not belong to your club.' };
+        return {
+          success: false,
+          error:
+            'One or more selected members do not belong to your club.',
+        };
       }
     }
-    return { success: false, error: 'An unexpected database error occurred.' };
+
+    return {
+      success: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Unknown database error',
+    };
   }
 }
 
@@ -128,8 +250,13 @@ export async function assignTaskAction(
  */
 export async function getClubMembersAction() {
   const user = await requireRole('DEPARTMENT_LEAD');
+
   const club = await getLeadClub(user.id);
-  if (!club) return [];
+
+  if (!club) {
+    return [];
+  }
+
   return getClubMembersWithStats(club.id);
 }
 
@@ -138,8 +265,13 @@ export async function getClubMembersAction() {
  */
 export async function getClubTasksAction() {
   const user = await requireRole('DEPARTMENT_LEAD');
+
   const club = await getLeadClub(user.id);
-  if (!club) return [];
+
+  if (!club) {
+    return [];
+  }
+
   return getClubTasks(club.id);
 }
 
@@ -148,24 +280,42 @@ export async function getClubTasksAction() {
  */
 export async function getClubCompletionsAction() {
   const user = await requireRole('DEPARTMENT_LEAD');
+
   const club = await getLeadClub(user.id);
-  if (!club) return [];
+
+  if (!club) {
+    return [];
+  }
+
   return getClubCompletions(club.id);
 }
 
 /**
  * Fetches details of a single member.
  */
-export async function getMemberPerformanceAction(memberId: string) {
+export async function getMemberPerformanceAction(
+  memberId: string
+) {
   const user = await requireRole('DEPARTMENT_LEAD');
+
   const club = await getLeadClub(user.id);
-  if (!club) return null;
+
+  if (!club) {
+    return null;
+  }
 
   // Validate ID format
-  const parsedId = z.string().uuid().safeParse(memberId);
+  const parsedId = z
+    .string()
+    .uuid()
+    .safeParse(memberId);
+
   if (!parsedId.success) {
     return null;
   }
 
-  return getMemberPerformanceDetails(club.id, memberId);
+  return getMemberPerformanceDetails(
+    club.id,
+    memberId
+  );
 }

@@ -92,6 +92,15 @@ export function MemberPerformanceClient({ summary }: MemberPerformanceClientProp
   const height = 150;
   const padding = 25;
 
+  const getAverageRatingLabel = (rating: number) => {
+    if (rating <= 0) return 'No evaluations yet';
+    if (rating < 2.0) return 'Needs Significant Improvement';
+    if (rating < 3.0) return 'Needs Improvement';
+    if (rating < 4.0) return 'Meets Expectations';
+    if (rating < 4.5) return 'Very Good';
+    return 'Excellent';
+  };
+
   return (
     <div className="space-y-8">
       <div>
@@ -147,13 +156,7 @@ export function MemberPerformanceClient({ summary }: MemberPerformanceClientProp
           <StatCard
             title="Overall Average Rating"
             value={averageRating > 0 ? `★ ${averageRating.toFixed(2)}` : 'N/A'}
-            subtext={
-              averageRating > 0
-                ? ['Needs Improvement', 'Needs Improvement', 'Meets Expectations', 'Very Good', 'Excellent'][
-                    Math.round(averageRating) - 1
-                  ]
-                : 'No evaluations yet'
-            }
+            subtext={getAverageRatingLabel(averageRating)}
             trend="neutral"
             trendValue="--"
             icon={Award}

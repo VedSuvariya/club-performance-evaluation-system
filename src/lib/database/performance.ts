@@ -1,7 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// Disabling any checks because Supabase nested join select returns have complex
-// anonymous shapes that are extremely tedious and volatile to type strictly.
+
 import { createSupabaseServerClient } from './server';
+
+// ============================================================
+// TYPES
+// ============================================================
 
 export interface PerformanceTrendPoint {
   date: string;
@@ -49,6 +52,7 @@ export interface MemberClubPerformanceDetails {
     email: string;
     joinedAt: string;
   };
+
   metrics: {
     assignedCount: number;
     completedCount: number;
@@ -57,6 +61,7 @@ export interface MemberClubPerformanceDetails {
     completionRate: number;
     averageRating: number;
   };
+
   taskHistory: {
     taskId: string;
     title: string;
@@ -70,86 +75,304 @@ export interface MemberClubPerformanceDetails {
       feedback: string;
     } | null;
   }[];
+
   recentEvaluations: EvaluationRecord[];
   trendData: PerformanceTrendPoint[];
 }
 
-/**
- * Retrieves all-time performance metrics and evaluations history for a single member across all clubs.
- * Used for the member's own performance dashboard view.
- */
-export async function getMemberPerformanceSummary(memberId: string): Promise<MemberPerformanceSummary> {
+// ============================================================
+// MEMBER PERFORMANCE SUMMARY
+// ============================================================
+
+export async function getMemberPerformanceSummary(
+  memberId: string
+): Promise<MemberPerformanceSummary> {
   const supabase = await createSupabaseServerClient();
 
-  // 1. Fetch total assigned tasks
-  const { count: totalAssignedCount, error: assignedError } = await supabase
+  // ----------------------------------------------------------
+  // 1. TOTAL ASSIGNED TASKS
+  // ----------------------------------------------------------
+
+  const {
+    count: totalAssignedCount,
+    error: assignedError,
+  } = await supabase
     .from('task_assignments')
-    .select('*', { count: 'exact', head: true })
+    .select('*', {
+      count: 'exact',
+      head: true,
+    })
     .eq('user_id', memberId);
 
-  if (assignedError) throw assignedError;
-  const totalAssigned = totalAssignedCount || 0;
+  if (assignedError) {
+    console.warn(
+      'Could not load assigned task count:',
+      assignedError
+    );
 
-  // 2. Fetch total completed tasks
-  const { count: totalCompletedCount, error: completedError } = await supabase
+    throw assignedError;
+  }
+
+  const totalAssigned = totalAssignedCount ?? 0;
+
+  // ----------------------------------------------------------
+  // 2. TOTAL COMPLETED TASKS
+  // ----------------------------------------------------------
+
+  const {
+    count: totalCompletedCount,
+    error: completedError,
+  } = await supabase
     .from('task_completions')
-    .select('*', { count: 'exact', head: true })
+    .select('*', {
+      count: 'exact',
+      head: true,
+    })
     .eq('user_id', memberId);
 
-  if (completedError) throw completedError;
-  const totalCompleted = totalCompletedCount || 0;
+  if (completedError) {
+    console.warn(
+      'Could not load completed task count:',
+      completedError
+    );
 
-  // 3. Fetch evaluations with task & evaluator details
-  const { data: evaluations, error: evaluationsError } = await supabase
+    throw completedError;
+  }
+
+  const totalCompleted = totalCompletedCount ?? 0;
+
+  // ----------------------------------------------------------
+  // 3. FETCH EVALUATIONS
+  //
+  // IMPORTANT:
+  // Do NOT use nested task/users relationships here.
+  // Fetch the evaluation rows directly first.
+  // ----------------------------------------------------------
+
+  const {
+    data: evaluationData,
+    error: evaluationsError,
+  } = await supabase
     .from('evaluations')
     .select(`
       id,
       task_id,
+      member_id,
+      evaluator_id,
       rating,
       feedback,
-      created_at,
-      task:tasks (
-        title
-      ),
-      evaluator:users (
-        full_name
-      )
+      created_at
     `)
     .eq('member_id', memberId)
-    .order('created_at', { ascending: false });
+    .order('created_at', {
+      ascending: false,
+    });
 
-  if (evaluationsError) throw evaluationsError;
+  if (evaluationsError) {
+    console.warn(
+      'Could not load member evaluations:',
+      {
+        code: evaluationsError.code,
+        message: evaluationsError.message,
+        details: evaluationsError.details,
+        hint: evaluationsError.hint,
+      }
+    );
 
-  const totalEvaluated = evaluations?.length || 0;
-  const pendingEvaluations = Math.max(0, totalCompleted - totalEvaluated);
-
-  let averageRating = 0;
-  if (totalEvaluated > 0) {
-    const sum = evaluations.reduce((acc, curr) => acc + curr.rating, 0);
-    averageRating = Number((sum / totalEvaluated).toFixed(2));
+    throw evaluationsError;
   }
 
-  const completionRate = totalAssigned > 0 ? Math.round((totalCompleted / totalAssigned) * 100) : 0;
+  const evaluations = evaluationData ?? [];
 
-  // Map to EvaluationRecord
-  const recentEvaluations: EvaluationRecord[] = (evaluations || []).map((e: any) => ({
-    id: e.id,
-    taskId: e.task_id,
-    taskTitle: e.task?.title || 'Unknown Task',
-    rating: e.rating,
-    feedback: e.feedback,
-    createdAt: e.created_at,
-    evaluatorName: e.evaluator?.full_name || 'Unknown Lead',
-  }));
+  // ----------------------------------------------------------
+  // 4. FETCH TASK TITLES
+  // ----------------------------------------------------------
 
-  // Trend data in chronological order (ASC)
-  const trendData: PerformanceTrendPoint[] = [...recentEvaluations]
-    .reverse()
-    .map((e) => ({
-      date: new Date(e.createdAt).toLocaleDateString(),
-      rating: e.rating,
-      taskTitle: e.taskTitle,
+  const taskIds = [
+    ...new Set(
+      evaluations
+        .map((evaluation) => evaluation.task_id)
+        .filter(Boolean)
+    ),
+  ];
+
+  let tasks: Array<{
+    id: string;
+    title: string;
+  }> = [];
+
+  if (taskIds.length > 0) {
+    const {
+      data: taskData,
+      error: tasksError,
+    } = await supabase
+      .from('tasks')
+      .select(`
+        id,
+        title
+      `)
+      .in('id', taskIds);
+
+    if (tasksError) {
+      console.warn(
+        'Could not load evaluation task titles:',
+        tasksError
+      );
+    } else {
+      tasks = taskData ?? [];
+    }
+  }
+
+  // ----------------------------------------------------------
+  // 5. FETCH EVALUATOR NAMES
+  // ----------------------------------------------------------
+
+  const evaluatorIds = [
+    ...new Set(
+      evaluations
+        .map((evaluation) => evaluation.evaluator_id)
+        .filter(Boolean)
+    ),
+  ];
+
+  let evaluators: Array<{
+    id: string;
+    full_name: string | null;
+    email: string | null;
+  }> = [];
+
+  if (evaluatorIds.length > 0) {
+    const {
+      data: evaluatorData,
+      error: evaluatorsError,
+    } = await supabase
+      .from('users')
+      .select(`
+        id,
+        full_name,
+        email
+      `)
+      .in('id', evaluatorIds);
+
+    if (evaluatorsError) {
+      console.warn(
+        'Could not load evaluator names:',
+        evaluatorsError
+      );
+    } else {
+      evaluators = evaluatorData ?? [];
+    }
+  }
+
+  // ----------------------------------------------------------
+  // 6. CALCULATE EVALUATION METRICS
+  // ----------------------------------------------------------
+
+  const totalEvaluated = evaluations.length;
+
+  const pendingEvaluations = Math.max(
+    0,
+    totalCompleted - totalEvaluated
+  );
+
+  let averageRating = 0;
+
+  if (totalEvaluated > 0) {
+    const ratingSum = evaluations.reduce(
+      (sum, evaluation) => {
+        return sum + Number(evaluation.rating || 0);
+      },
+      0
+    );
+
+    averageRating = Number(
+      (ratingSum / totalEvaluated).toFixed(2)
+    );
+  }
+
+  // ----------------------------------------------------------
+  // 7. COMPLETION RATE
+  // ----------------------------------------------------------
+
+  const completionRate =
+    totalAssigned > 0
+      ? Math.round(
+        (totalCompleted / totalAssigned) * 100
+      )
+      : 0;
+
+  // ----------------------------------------------------------
+  // 8. CREATE LOOKUP MAPS
+  // ----------------------------------------------------------
+
+  const taskMap = new Map(
+    tasks.map((task) => [
+      task.id,
+      task.title,
+    ])
+  );
+
+  const evaluatorMap = new Map(
+    evaluators.map((evaluator) => [
+      evaluator.id,
+      evaluator.full_name ||
+      evaluator.email ||
+      'Unknown Lead',
+    ])
+  );
+
+  // ----------------------------------------------------------
+  // 9. FORMAT RECENT EVALUATIONS
+  // ----------------------------------------------------------
+
+  const recentEvaluations: EvaluationRecord[] =
+    evaluations.map((evaluation) => ({
+      id: evaluation.id,
+
+      taskId: evaluation.task_id,
+
+      taskTitle:
+        taskMap.get(evaluation.task_id) ||
+        'Unknown Task',
+
+      rating: Number(
+        evaluation.rating ?? 0
+      ),
+
+      feedback:
+        evaluation.feedback ?? '',
+
+      createdAt:
+        evaluation.created_at,
+
+      evaluatorName:
+        evaluatorMap.get(
+          evaluation.evaluator_id
+        ) || 'Unknown Lead',
     }));
+
+  // ----------------------------------------------------------
+  // 10. CREATE TREND DATA
+  // ----------------------------------------------------------
+
+  const trendData: PerformanceTrendPoint[] =
+    [...recentEvaluations]
+      .reverse()
+      .map((evaluation) => ({
+        date: new Date(
+          evaluation.createdAt
+        ).toLocaleDateString(),
+
+        rating:
+          evaluation.rating,
+
+        taskTitle:
+          evaluation.taskTitle,
+      }));
+
+  // ----------------------------------------------------------
+  // 11. RETURN MEMBER PERFORMANCE SUMMARY
+  // ----------------------------------------------------------
 
   return {
     totalAssigned,
@@ -163,15 +386,23 @@ export async function getMemberPerformanceSummary(memberId: string): Promise<Mem
   };
 }
 
-/**
- * Retrieves performance metrics for all members active in a specific club.
- * Used for the Department Lead performance dashboard.
- */
-export async function getClubMembersPerformanceList(clubId: string): Promise<ClubMemberPerformance[]> {
+// ============================================================
+// CLUB MEMBERS PERFORMANCE LIST
+// ============================================================
+
+export async function getClubMembersPerformanceList(
+  clubId: string
+): Promise<ClubMemberPerformance[]> {
   const supabase = await createSupabaseServerClient();
 
-  // 1. Fetch active memberships
-  const { data: memberships, error: memError } = await supabase
+  // ----------------------------------------------------------
+  // 1. ACTIVE MEMBERSHIPS
+  // ----------------------------------------------------------
+
+  const {
+    data: memberships,
+    error: memError,
+  } = await supabase
     .from('memberships')
     .select(`
       joined_at,
@@ -184,24 +415,53 @@ export async function getClubMembersPerformanceList(clubId: string): Promise<Clu
     .eq('club_id', clubId)
     .eq('status', 'ACTIVE');
 
-  if (memError) throw memError;
-  if (!memberships || memberships.length === 0) return [];
+  if (memError) {
+    console.warn(
+      'Could not load club memberships:',
+      memError
+    );
 
-  // 2. Fetch all tasks belonging to this club
-  const { data: tasks, error: tasksError } = await supabase
+    throw memError;
+  }
+
+  if (!memberships || memberships.length === 0) {
+    return [];
+  }
+
+  // ----------------------------------------------------------
+  // 2. CLUB TASKS
+  // ----------------------------------------------------------
+
+  const {
+    data: tasks,
+    error: tasksError,
+  } = await supabase
     .from('tasks')
     .select('id')
     .eq('club_id', clubId);
 
-  if (tasksError) throw tasksError;
-  const taskIds = tasks?.map((t) => t.id) || [];
+  if (tasksError) {
+    console.warn(
+      'Could not load club tasks:',
+      tasksError
+    );
+
+    throw tasksError;
+  }
+
+  const taskIds =
+    tasks?.map((task) => task.id) ?? [];
 
   if (taskIds.length === 0) {
-    return memberships.map((m: any) => ({
-      id: m.user?.id || '',
-      fullName: m.user?.full_name || 'Unknown Member',
-      email: m.user?.email || '',
-      joinedAt: m.joined_at,
+    return memberships.map((membership: any) => ({
+      id: membership.user?.id ?? '',
+      fullName:
+        membership.user?.full_name ??
+        'Unknown Member',
+      email:
+        membership.user?.email ?? '',
+      joinedAt:
+        membership.joined_at,
       assignedCount: 0,
       completedCount: 0,
       evaluatedCount: 0,
@@ -210,41 +470,155 @@ export async function getClubMembersPerformanceList(clubId: string): Promise<Clu
     }));
   }
 
-  // 3. Batch fetch assignments, completions, evaluations for these tasks to avoid N+1 queries
-  const [assocRes, complRes, evalsRes] = await Promise.all([
-    supabase.from('task_assignments').select('user_id, task_id').in('task_id', taskIds),
-    supabase.from('task_completions').select('user_id, task_id').in('task_id', taskIds),
-    supabase.from('evaluations').select('member_id, task_id, rating').in('task_id', taskIds),
+  // ----------------------------------------------------------
+  // 3. LOAD ASSIGNMENTS / COMPLETIONS / EVALUATIONS
+  // ----------------------------------------------------------
+
+  const [
+    assignmentsResult,
+    completionsResult,
+    evaluationsResult,
+  ] = await Promise.all([
+    supabase
+      .from('task_assignments')
+      .select('user_id, task_id')
+      .in('task_id', taskIds),
+
+    supabase
+      .from('task_completions')
+      .select('user_id, task_id')
+      .in('task_id', taskIds),
+
+    supabase
+      .from('evaluations')
+      .select(
+        'member_id, task_id, rating'
+      )
+      .in('task_id', taskIds),
   ]);
 
-  if (assocRes.error) throw assocRes.error;
-  if (complRes.error) throw complRes.error;
-  if (evalsRes.error) throw evalsRes.error;
+  if (assignmentsResult.error) {
+    console.warn(
+      'Could not load task assignments:',
+      assignmentsResult.error
+    );
 
-  const assignments = assocRes.data || [];
-  const completions = complRes.data || [];
-  const evaluations = evalsRes.data || [];
+    throw assignmentsResult.error;
+  }
 
-  // 4. Compute metrics in-memory
-  return memberships.map((m: any) => {
-    const userId = m.user?.id || '';
-    const userAssignments = assignments.filter((a) => a.user_id === userId);
-    const userCompletions = completions.filter((c) => c.user_id === userId);
-    const userEvaluations = evaluations.filter((e) => e.member_id === userId);
+  if (completionsResult.error) {
+    console.warn(
+      'Could not load task completions:',
+      completionsResult.error
+    );
 
-    const assignedCount = userAssignments.length;
-    const completedCount = userCompletions.length;
-    const evaluatedCount = userEvaluations.length;
+    throw completionsResult.error;
+  }
 
-    const ratingSum = userEvaluations.reduce((sum, e) => sum + e.rating, 0);
-    const averageRating = evaluatedCount > 0 ? Number((ratingSum / evaluatedCount).toFixed(2)) : 0;
-    const completionRate = assignedCount > 0 ? Math.round((completedCount / assignedCount) * 100) : 0;
+  const assignments =
+    assignmentsResult.data ?? [];
+
+  const completions =
+    completionsResult.data ?? [];
+
+  /*
+   * Evaluations are optional.
+   *
+   * If evaluations have an RLS problem, don't break
+   * the entire club performance page.
+   */
+
+  let evaluations: any[] = [];
+
+  if (evaluationsResult.error) {
+    console.warn(
+      'Could not load club evaluations. Continuing without evaluations.',
+      evaluationsResult.error
+    );
+
+    evaluations = [];
+  } else {
+    evaluations =
+      evaluationsResult.data ?? [];
+  }
+
+  // ----------------------------------------------------------
+  // 4. CALCULATE MEMBER METRICS
+  // ----------------------------------------------------------
+
+  return memberships.map((membership: any) => {
+    const userId =
+      membership.user?.id ?? '';
+
+    const userAssignments =
+      assignments.filter(
+        (assignment) =>
+          assignment.user_id === userId
+      );
+
+    const userCompletions =
+      completions.filter(
+        (completion) =>
+          completion.user_id === userId
+      );
+
+    const userEvaluations =
+      evaluations.filter(
+        (evaluation) =>
+          evaluation.member_id === userId
+      );
+
+    const assignedCount =
+      userAssignments.length;
+
+    const completedCount =
+      userCompletions.length;
+
+    const evaluatedCount =
+      userEvaluations.length;
+
+    const ratingSum =
+      userEvaluations.reduce(
+        (sum, evaluation) =>
+          sum +
+          Number(
+            evaluation.rating ?? 0
+          ),
+        0
+      );
+
+    const averageRating =
+      evaluatedCount > 0
+        ? Number(
+          (
+            ratingSum /
+            evaluatedCount
+          ).toFixed(2)
+        )
+        : 0;
+
+    const completionRate =
+      assignedCount > 0
+        ? Math.round(
+          (completedCount /
+            assignedCount) *
+          100
+        )
+        : 0;
 
     return {
       id: userId,
-      fullName: m.user?.full_name || 'Unknown Member',
-      email: m.user?.email || '',
-      joinedAt: m.joined_at,
+
+      fullName:
+        membership.user?.full_name ??
+        'Unknown Member',
+
+      email:
+        membership.user?.email ?? '',
+
+      joinedAt:
+        membership.joined_at,
+
       assignedCount,
       completedCount,
       evaluatedCount,
@@ -254,18 +628,25 @@ export async function getClubMembersPerformanceList(clubId: string): Promise<Clu
   });
 }
 
-/**
- * Retrieves single member detail and task logs isolated to a specific club department.
- * Used for the Department Lead member detail page.
- */
+// ============================================================
+// MEMBER CLUB PERFORMANCE DETAILS
+// ============================================================
+
 export async function getMemberClubPerformanceDetails(
   clubId: string,
   memberId: string
 ): Promise<MemberClubPerformanceDetails | null> {
-  const supabase = await createSupabaseServerClient();
+  const supabase =
+    await createSupabaseServerClient();
 
-  // 1. Fetch active membership details and verify club boundaries
-  const { data: membership, error: memError } = await supabase
+  // ----------------------------------------------------------
+  // 1. VERIFY MEMBERSHIP
+  // ----------------------------------------------------------
+
+  const {
+    data: membership,
+    error: memError,
+  } = await supabase
     .from('memberships')
     .select(`
       joined_at,
@@ -280,26 +661,68 @@ export async function getMemberClubPerformanceDetails(
     .eq('status', 'ACTIVE')
     .maybeSingle();
 
-  if (memError || !membership) return null;
-  const user = (membership as any).user;
+  if (memError) {
+    console.warn(
+      'Could not verify membership:',
+      memError
+    );
 
-  // 2. Fetch all tasks belonging to this club
-  const { data: tasks, error: tasksError } = await supabase
+    return null;
+  }
+
+  if (!membership) {
+    return null;
+  }
+
+  const user =
+    (membership as any).user;
+
+  // ----------------------------------------------------------
+  // 2. FETCH CLUB TASKS
+  // ----------------------------------------------------------
+
+  const {
+    data: tasks,
+    error: tasksError,
+  } = await supabase
     .from('tasks')
-    .select('id, title, description, due_date, status')
+    .select(
+      'id, title, description, due_date, status'
+    )
     .eq('club_id', clubId);
 
-  if (tasksError) throw tasksError;
-  const taskIds = tasks?.map((t) => t.id) || [];
+  if (tasksError) {
+    console.warn(
+      'Could not load club tasks:',
+      tasksError
+    );
+
+    throw tasksError;
+  }
+
+  const taskIds =
+    tasks?.map((task) => task.id) ?? [];
+
+  // ----------------------------------------------------------
+  // NO TASKS
+  // ----------------------------------------------------------
 
   if (taskIds.length === 0) {
     return {
       member: {
         id: memberId,
-        fullName: user?.full_name || 'Unknown Member',
-        email: user?.email || '',
-        joinedAt: membership.joined_at,
+
+        fullName:
+          user?.full_name ??
+          'Unknown Member',
+
+        email:
+          user?.email ?? '',
+
+        joinedAt:
+          membership.joined_at,
       },
+
       metrics: {
         assignedCount: 0,
         completedCount: 0,
@@ -308,24 +731,38 @@ export async function getMemberClubPerformanceDetails(
         completionRate: 0,
         averageRating: 0,
       },
+
       taskHistory: [],
       recentEvaluations: [],
       trendData: [],
     };
   }
 
-  // 3. Batch fetch data for this member
-  const [assocRes, complRes, evalsRes] = await Promise.all([
+  // ----------------------------------------------------------
+  // 3. FETCH MEMBER DATA
+  // ----------------------------------------------------------
+
+  const [
+    assignmentsResult,
+    completionsResult,
+    evaluationsResult,
+  ] = await Promise.all([
     supabase
       .from('task_assignments')
-      .select('task_id, assigned_at')
+      .select(
+        'task_id, assigned_at'
+      )
       .eq('user_id', memberId)
       .in('task_id', taskIds),
+
     supabase
       .from('task_completions')
-      .select('task_id, status, notes, submitted_at')
+      .select(
+        'task_id, status, notes, submitted_at'
+      )
       .eq('user_id', memberId)
       .in('task_id', taskIds),
+
     supabase
       .from('evaluations')
       .select(`
@@ -340,77 +777,242 @@ export async function getMemberClubPerformanceDetails(
       `)
       .eq('member_id', memberId)
       .in('task_id', taskIds)
-      .order('created_at', { ascending: false }),
+      .order('created_at', {
+        ascending: false,
+      }),
   ]);
 
-  if (assocRes.error) throw assocRes.error;
-  if (complRes.error) throw complRes.error;
-  if (evalsRes.error) throw evalsRes.error;
+  if (assignmentsResult.error) {
+    console.warn(
+      'Could not load member assignments:',
+      assignmentsResult.error
+    );
 
-  const assignments = assocRes.data || [];
-  const completions = complRes.data || [];
-  const evaluations = evalsRes.data || [];
+    throw assignmentsResult.error;
+  }
 
-  // Compute stats
-  const assignedCount = assignments.length;
-  const completedCount = completions.length;
-  const evaluatedCount = evaluations.length;
-  const pendingEvaluations = Math.max(0, completedCount - evaluatedCount);
-  const completionRate = assignedCount > 0 ? Math.round((completedCount / assignedCount) * 100) : 0;
+  if (completionsResult.error) {
+    console.warn(
+      'Could not load member completions:',
+      completionsResult.error
+    );
 
-  const ratingSum = evaluations.reduce((sum, e) => sum + e.rating, 0);
-  const averageRating = evaluatedCount > 0 ? Number((ratingSum / evaluatedCount).toFixed(2)) : 0;
+    throw completionsResult.error;
+  }
 
-  // Format task logs
-  const taskHistory = assignments.map((a) => {
-    const task = tasks?.find((t) => t.id === a.task_id);
-    const completion = completions.find((c) => c.task_id === a.task_id);
-    const evaluation = evaluations.find((e) => e.task_id === a.task_id);
+  const assignments =
+    assignmentsResult.data ?? [];
 
-    return {
-      taskId: a.task_id,
-      title: task?.title || 'Unknown Task',
-      assignedAt: a.assigned_at,
-      dueDate: task?.due_date || null,
-      status: completion ? completion.status : 'PENDING',
-      notes: completion ? completion.notes : '',
-      completionDate: completion ? completion.submitted_at : null,
-      evaluation: evaluation
-        ? {
-            rating: evaluation.rating,
-            feedback: evaluation.feedback,
+  const completions =
+    completionsResult.data ?? [];
+
+  let evaluations: any[] = [];
+
+  if (evaluationsResult.error) {
+    console.warn(
+      'Could not load member evaluations. Continuing without evaluations.',
+      evaluationsResult.error
+    );
+
+    evaluations = [];
+  } else {
+    evaluations =
+      evaluationsResult.data ?? [];
+  }
+
+  // ----------------------------------------------------------
+  // 4. CALCULATE METRICS
+  // ----------------------------------------------------------
+
+  const assignedCount =
+    assignments.length;
+
+  const completedCount =
+    completions.length;
+
+  const evaluatedCount =
+    evaluations.length;
+
+  const pendingEvaluations =
+    Math.max(
+      0,
+      completedCount -
+      evaluatedCount
+    );
+
+  const completionRate =
+    assignedCount > 0
+      ? Math.round(
+        (completedCount /
+          assignedCount) *
+        100
+      )
+      : 0;
+
+  const ratingSum =
+    evaluations.reduce(
+      (sum, evaluation) =>
+        sum +
+        Number(
+          evaluation.rating ?? 0
+        ),
+      0
+    );
+
+  const averageRating =
+    evaluatedCount > 0
+      ? Number(
+        (
+          ratingSum /
+          evaluatedCount
+        ).toFixed(2)
+      )
+      : 0;
+
+  // ----------------------------------------------------------
+  // 5. TASK HISTORY
+  // ----------------------------------------------------------
+
+  const taskHistory =
+    assignments.map((assignment) => {
+      const task =
+        tasks?.find(
+          (item) =>
+            item.id ===
+            assignment.task_id
+        );
+
+      const completion =
+        completions.find(
+          (item) =>
+            item.task_id ===
+            assignment.task_id
+        );
+
+      const evaluation =
+        evaluations.find(
+          (item) =>
+            item.task_id ===
+            assignment.task_id
+        );
+
+      return {
+        taskId:
+          assignment.task_id,
+
+        title:
+          task?.title ??
+          'Unknown Task',
+
+        assignedAt:
+          assignment.assigned_at,
+
+        dueDate:
+          task?.due_date ?? null,
+
+        status:
+          completion?.status ??
+          'PENDING',
+
+        notes:
+          completion?.notes ?? '',
+
+        completionDate:
+          completion?.submitted_at ??
+          null,
+
+        evaluation: evaluation
+          ? {
+            rating: Number(
+              evaluation.rating ??
+              0
+            ),
+
+            feedback:
+              evaluation.feedback ??
+              '',
           }
-        : null,
-    };
-  });
+          : null,
+      };
+    });
 
-  // Recent evaluations
-  const recentEvaluations: EvaluationRecord[] = evaluations.map((e: any) => ({
-    id: e.id,
-    taskId: e.task_id,
-    taskTitle: tasks?.find((t) => t.id === e.task_id)?.title || 'Unknown Task',
-    rating: e.rating,
-    feedback: e.feedback,
-    createdAt: e.created_at,
-    evaluatorName: e.evaluator?.full_name || 'Unknown Lead',
-  }));
+  // ----------------------------------------------------------
+  // 6. RECENT EVALUATIONS
+  // ----------------------------------------------------------
 
-  // Trend data chronologically (ASC)
-  const trendData: PerformanceTrendPoint[] = [...recentEvaluations]
-    .reverse()
-    .map((e) => ({
-      date: new Date(e.createdAt).toLocaleDateString(),
-      rating: e.rating,
-      taskTitle: e.taskTitle,
-    }));
+  const recentEvaluations:
+    EvaluationRecord[] =
+    evaluations.map(
+      (evaluation: any) => ({
+        id: evaluation.id,
+
+        taskId:
+          evaluation.task_id,
+
+        taskTitle:
+          tasks?.find(
+            (task) =>
+              task.id ===
+              evaluation.task_id
+          )?.title ??
+          'Unknown Task',
+
+        rating: Number(
+          evaluation.rating ?? 0
+        ),
+
+        feedback:
+          evaluation.feedback ?? '',
+
+        createdAt:
+          evaluation.created_at,
+
+        evaluatorName:
+          evaluation.evaluator
+            ?.full_name ??
+          'Unknown Lead',
+      })
+    );
+
+  // ----------------------------------------------------------
+  // 7. TREND DATA
+  // ----------------------------------------------------------
+
+  const trendData:
+    PerformanceTrendPoint[] =
+    [...recentEvaluations]
+      .reverse()
+      .map((evaluation) => ({
+        date: new Date(
+          evaluation.createdAt
+        ).toLocaleDateString(),
+
+        rating:
+          evaluation.rating,
+
+        taskTitle:
+          evaluation.taskTitle,
+      }));
+
+  // ----------------------------------------------------------
+  // 8. RETURN RESULT
+  // ----------------------------------------------------------
 
   return {
     member: {
       id: memberId,
-      fullName: user?.full_name || 'Unknown Member',
-      email: user?.email || '',
-      joinedAt: membership.joined_at,
+
+      fullName:
+        user?.full_name ??
+        'Unknown Member',
+
+      email:
+        user?.email ?? '',
+
+      joinedAt:
+        membership.joined_at,
     },
+
     metrics: {
       assignedCount,
       completedCount,
@@ -419,6 +1021,7 @@ export async function getMemberClubPerformanceDetails(
       completionRate,
       averageRating,
     },
+
     taskHistory,
     recentEvaluations,
     trendData,

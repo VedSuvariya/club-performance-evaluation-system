@@ -69,8 +69,12 @@ CREATE TABLE IF NOT EXISTS public.task_completions (
   submitted_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   -- Ensure only assigned members can submit a completion
-  FOREIGN KEY (task_id, user_id) REFERENCES public.task_assignments(task_id, user_id) ON DELETE CASCADE
+  FOREIGN KEY (task_id, user_id) REFERENCES public.task_assignments(task_id, user_id) ON DELETE CASCADE,
+  UNIQUE (task_id, user_id)
 );
+
+-- Ensure task_completions has the required UNIQUE constraint/index before evaluations references it
+CREATE UNIQUE INDEX IF NOT EXISTS unique_task_completions_task_user ON public.task_completions (task_id, user_id);
 
 -- 7. Create evaluations table (ratings & feedback submitted by Department Leads)
 CREATE TABLE IF NOT EXISTS public.evaluations (

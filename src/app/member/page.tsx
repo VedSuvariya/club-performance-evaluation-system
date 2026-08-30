@@ -11,6 +11,7 @@ import {
 } from '@/components/dashboard/components';
 import { getMemberTasks, TaskDetails } from '@/lib/database/tasks';
 import { getMemberPerformanceSummary } from '@/lib/database/performance';
+import { getMemberTransferHistory, TransferRequest } from '@/lib/database/club-transfers';
 import { CheckSquare, Clock, FileText, ArrowLeftRight, HelpCircle, Award, TrendingUp } from 'lucide-react';
 import Link from 'next/link';
 import { EmptyState } from '@/components/feedback/FeedbackStates';
@@ -56,6 +57,15 @@ export default async function MemberPage() {
   } catch (err) {
     console.error('Failed to load performance summary', err);
   }
+
+  // Fetch transfer history to see if a transfer request is pending
+  let transferHistory: TransferRequest[] = [];
+  try {
+    transferHistory = await getMemberTransferHistory(profile.id);
+  } catch (err) {
+    console.error('Failed to load transfer history', err);
+  }
+  const pendingTransfer = transferHistory.find((t) => t.status === 'PENDING');
 
   // Calculate task status statistics for the dashboard
   const now = new Date();
@@ -124,6 +134,21 @@ export default async function MemberPage() {
             </Link>
           }
         />
+
+        {pendingTransfer && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20 p-4 flex items-start gap-3 shadow-sm animate-pulse">
+            <ArrowLeftRight className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+            <div>
+              <h4 className="text-sm font-semibold text-amber-850 dark:text-amber-300">
+                Transfer Request Pending
+              </h4>
+              <p className="mt-1 text-xs text-amber-700 dark:text-amber-400 leading-normal">
+                You have requested a transfer to <span className="font-semibold text-amber-950 dark:text-amber-200">{pendingTransfer.newClubName}</span> on{' '}
+                <span className="font-semibold">{new Date(pendingTransfer.createdAt).toLocaleDateString()}</span>. Your request is currently under review by the Club President.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Concise Performance Overview Metrics Grid */}
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -195,11 +220,13 @@ export default async function MemberPage() {
             </div>
 
             <div className="grid gap-4 grid-cols-2">
-              <QuickActionCard
-                title="Request Transfer"
-                description="Apply to transfer to a different club department."
-                icon={ArrowLeftRight}
-              />
+              <Link href="/member/club-transfer" className="block w-full">
+                <QuickActionCard
+                  title="Request Transfer"
+                  description="Apply to transfer to a different club department."
+                  icon={ArrowLeftRight}
+                />
+              </Link>
               <QuickActionCard
                 title="Get Help"
                 description="View documentation and system support instructions."
