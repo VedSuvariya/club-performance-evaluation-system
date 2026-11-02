@@ -349,3 +349,30 @@ Key outcomes include:
 ## License
 
 This project is developed for academic purposes. Add an appropriate open-source license before permitting reuse or redistribution.
+---
+
+## Application Screenshots
+
+### 1. Login Page
+![Login Page](docs/screenshots/login.png)
+
+### 2. Member Dashboard
+![Member Dashboard](docs/screenshots/member-dashboard.png)
+
+### 3. Department Lead Dashboard
+![Department Lead Dashboard](docs/screenshots/department-lead-dashboard.png)
+
+### 4. Task Assignment
+![Task Assignment](docs/screenshots/task-assignment.png)
+
+### 5. Evaluation and Rating
+![Evaluation and Rating](docs/screenshots/evaluation.png)
+
+### 6. Club President Dashboard
+![Club President Dashboard](docs/screenshots/president-dashboard.png)
+
+### 7. Student Welfare Council Dashboard
+![SWC Dashboard](docs/screenshots/swc-dashboard.png)
+
+### 8. Generated Performance Report
+![Performance Report](docs/screenshots/performance-report.png)
