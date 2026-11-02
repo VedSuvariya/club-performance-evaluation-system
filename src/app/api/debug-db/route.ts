@@ -5,48 +5,72 @@ export async function GET() {
   try {
     const supabase = await createSupabaseServerClient();
     
-    // Query rowsecurity status of all public tables
-    const { data: tablesInfo, error: tablesError } = await supabase.rpc('exec_sql', {
-      sql: `SELECT tablename, rowsecurity FROM pg_tables WHERE schemaname = 'public'`
-    });
-
-    // Query all policies in the public schema
-    const { data: policiesInfo, error: policiesError } = await supabase.rpc('exec_sql', {
-      sql: `SELECT schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check FROM pg_policies WHERE schemaname = 'public'`
-    });
-
-    // Query grants on public tables to authenticated and anon roles
-    const { data: grantsInfo, error: grantsError } = await supabase.rpc('exec_sql', {
+    // Query Coding Club
+    const { data: codingClub, error: codingClubError } = await supabase.rpc('exec_sql', {
       sql: `
         SELECT 
-          table_name, 
-          grantee, 
-          privilege_type 
-        FROM information_schema.role_table_grants 
-        WHERE table_schema = 'public' 
-          AND grantee IN ('authenticated', 'anon', 'public')
+          c.id, 
+          c.name, 
+          c.club_president_id, 
+          u1.full_name AS president_name, 
+          u1.email AS president_email, 
+          c.department_lead_id, 
+          u2.full_name AS lead_name, 
+          u2.email AS lead_email 
+        FROM public.clubs c 
+        LEFT JOIN public.users u1 ON c.club_president_id = u1.id 
+        LEFT JOIN public.users u2 ON c.department_lead_id = u2.id 
+        WHERE c.name = 'Coding Club'
       `
+    });
+
+    // Query Active Members of Coding Club
+    const { data: activeMembers, error: activeMembersError } = await supabase.rpc('exec_sql', {
+      sql: `
+        SELECT 
+          m.id AS membership_id, 
+          m.user_id, 
+          u.full_name, 
+          u.email, 
+          u.role, 
+          m.status 
+        FROM public.memberships m 
+        JOIN public.users u ON m.user_id = u.id 
+        JOIN public.clubs c ON m.club_id = c.id 
+        WHERE c.name = 'Coding Club' AND m.status = 'ACTIVE'
+      `
+    });
+
+    // Query All Clubs
+    const { data: allClubs, error: allClubsError } = await supabase.rpc('exec_sql', {
+      sql: `SELECT id, name, is_active FROM public.clubs`
+    });
+
+    // Query User Count by Role
+    const { data: roleCounts, error: roleCountsError } = await supabase.rpc('exec_sql', {
+      sql: `SELECT role, count(*) FROM public.users GROUP BY role`
     });
 
     return NextResponse.json({
       success: true,
-      tables: tablesInfo,
-      policies: policiesInfo,
-      grants: grantsInfo,
+      codingClub: codingClub?.[0] || null,
+      activeMembers,
+      allClubs,
+      roleCounts,
       errors: {
-        tables: tablesError,
-        policies: policiesError,
-        grants: grantsError,
+        codingClub: codingClubError,
+        activeMembers: activeMembersError,
+        allClubs: allClubsError,
+        roleCounts: roleCountsError,
       }
     });
   } catch (error: any) {
-    console.error('Debug DB Error:', error);
+    console.error('Debug DB Data Error:', error);
     return NextResponse.json({
       success: false,
       error: {
         message: error.message,
         code: error.code,
-        stack: error.stack,
       }
     }, { status: 500 });
   }
